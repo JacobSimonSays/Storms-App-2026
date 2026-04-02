@@ -64,23 +64,124 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
     }));
   };
 
+  const ownedAbilities = useMemo(() => {
+    const classInfo = (CLASS_DATA.classes as any)[arsenal.className];
+    
+    return ALL_ABILITIES.filter(power => {
+      // 1. Did they explicitly buy it? (Casters/Choices)
+      const isPurchased = (Number(arsenal.selectedMap[power.powerId]) || 0) > 0;
+      
+      // 2. Is it a core class ability for their level? (Martials/Passives)
+      // This checks your tierMapping to see if this power belongs to this class at this level.
+      const isAutomatic = classInfo?.tierMapping?.some(
+        (m: any) => m.powerId === power.powerId && m.level <= arsenal.level &&  m.level > 0
+      );
+
+      return isPurchased || isAutomatic;
+    });
+  }, [arsenal]);
+
   const groupedAbilities = useMemo(() => {
     const classInfo = (CLASS_DATA.classes as any)[arsenal.className];
     const mapping = classInfo?.tierMapping || [];
-    const owned = ALL_ABILITIES.filter(a => (Number(arsenal.selectedMap[a.powerId]) || 0) > 0);
 
-    return owned.reduce((acc, ability) => {
+    // USE THE NEW LIST HERE
+    return ownedAbilities.reduce((acc, ability) => {
       const tier = mapping.find((m: any) => m.powerId === ability.powerId);
-      const lvl = tier ? tier.level : 'Misc'; // Changed 'Borrowed' to 'Misc' for cleaner sorting
-      if (lvl === 0 || lvl === '0') return acc;
+      
+      // Fallback for Martials: If no tier is found, group under 'Class Abilities'
+      const lvl = tier ? tier.level : 'Class Abilities'; 
+      
       if (!acc[lvl]) acc[lvl] = [];
       acc[lvl].push(ability);
       return acc;
     }, {} as Record<string, any[]>);
-  }, [arsenal]);
+  }, [ownedAbilities, arsenal.className]); // Update dependencies
+
+  const renderPowerBlock = (powerId: string, isReference = false) => {
+    const power = ALL_ABILITIES.find(a => a.powerId === powerId);
+    if (!power) return null;
+
+    // 1. MAIN POWER: Clean, Open, No Border-Left, No Box
+    if (!isReference) {
+      return (
+        <div key={powerId} style={{ marginBottom: '20px' }}>
+          {/* Frequency & Charge */}
+          <div style={{ fontStyle: 'italic', fontSize: '1.5rem', marginBottom: '4px', color: '#444' }}>
+            {power.frequency}{power.charge ? `; Charge` : ''}
+          </div>
+
+          {/* Metadata Bar */}
+          <div style={{ 
+            color: '#4b4b4b', 
+            fontSize: '1.05rem', 
+            borderBottom: '1px solid #ccc', 
+            paddingBottom: '6px', 
+            marginBottom: '10px' 
+          }}>
+            {[power.school, power.abilityType, power.power, power.abilityRange, power.material].filter(Boolean).join(' | ')}
+          </div>
+
+          {/* Incantation */}
+          {power.incantation && (
+            <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#333', fontSize: '1.05rem', whiteSpace: 'pre-line' }}>
+              "{power.incantation}"{power.incantation_multiplier > 1 ? ` x${power.incantation_multiplier}` : ''}
+            </div>
+          )}
+
+          {/* Main Effect Body - Big Text */}
+          <div style={{ fontSize: '1.15rem', lineHeight: '1.6', whiteSpace: 'pre-line', color: '#000' }}>
+            {power.effect}
+          </div>
+
+          {/* Notes & Restrictions */}
+          {power.note && (
+            <div style={{ fontSize: '1.15rem', lineHeight: '1.6', marginTop: '12px' }}>
+              <strong>Note:</strong> {power.note}
+            </div>
+          )}
+          {power.limitation && (
+            <div style={{ fontSize: '1.15rem', lineHeight: '1.6', marginTop: '12px' }}>
+              <strong>Restriction:</strong> {power.limitation}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 2. REFERENCE BLOCK: Grey Box, Indented, Bordered
+    return (
+      <div key={powerId} style={{ 
+        backgroundColor: 'rgba(0,0,0,0.05)', 
+        border: `1px solid ${theme.dark}44`, 
+        padding: '15px', 
+        borderRadius: '6px', 
+        marginTop: '15px',
+        borderLeft: `4px solid ${theme.dark}` // The bar only lives here!
+      }}>
+        <div style={{ fontSize: '1.1rem', fontFamily: "'HeaderFont', serif", color: theme.dark, marginBottom: '4px', textTransform: 'uppercase' }}>
+          {power.name}
+        </div>
+        <div style={{ fontStyle: 'italic', marginBottom: '4px', fontSize: '0.9rem' }}>
+          {power.frequency}{power.charge ? `; Charge` : ''}
+        </div>
+        <div style={{ fontSize: '0.85rem', opacity: 0.7, borderBottom: '1px solid #ccc', marginBottom: '8px', paddingBottom: '4px' }}>
+          {[power.school, power.abilityType, power.power, power.abilityRange, power.material].filter(Boolean).join(' | ')}
+        </div>
+        <div style={{ fontSize: '0.95rem', whiteSpace: 'pre-line', color: '#000' }}>
+          {power.effect}
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div style={{ width: '100%', minHeight: '100vh', paddingBottom: '40px', backgroundColor: '#f5f5f5' }}>
+    <div style={{ 
+      width: '100%', 
+      minHeight: '100vh', 
+      paddingBottom: '40px', 
+      backgroundColor: 'transparent' // Let App.tsx background show through
+    }}>
       
       <div style={fixedInterfaceBlock}>
         <header style={{ ...headerStyle, backgroundColor: theme.dark, color: theme.text }}>
@@ -109,19 +210,21 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
       <main style={{ paddingTop: '215px', paddingLeft: '10px', paddingRight: '10px' }}>
         {Object.keys(groupedAbilities).sort().map(lvl => (
           <div key={lvl}>
-            <h3 style={levelHeaderStyle}>{lvl === 'Misc' ? 'Other Abilities' : `Level ${lvl}`}</h3>
+            <h3 style={levelHeaderStyle}>{lvl === 'Class Abilities' ? lvl : `Level ${lvl}`}</h3>
 
             {groupedAbilities[lvl].map(power => {
               const isExpanded = expandedIds.has(power.powerId);
               const currentUses = charges[power.powerId];
+              const wildcardChoice = arsenal.selectedMap[`${power.powerId}_choice`];
 
               return (
                 <div key={power.powerId} style={{ marginBottom: '8px' }}>
+                  {/* THE CLICKABLE ROW */}
                   <div 
                     onClick={() => {
-                       const next = new Set(expandedIds);
-                       next.has(power.powerId) ? next.delete(power.powerId) : next.add(power.powerId);
-                       setExpandedIds(next);
+                      const next = new Set(expandedIds);
+                      next.has(power.powerId) ? next.delete(power.powerId) : next.add(power.powerId);
+                      setExpandedIds(next);
                     }} 
                     style={{ ...powerRowStyle, backgroundColor: theme.dark }}
                   >
@@ -138,45 +241,25 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
                     </div>
                   </div>
 
+                  {/* THE EXPANDED CONTENT (Synced with Builder) */}
                   {isExpanded && (
                     <div style={expandedCardStyle}>
-                      <div style={frequencySubStyle}>
-                        {power.frequency} {power.charge ? ' | Charge' : ''}
-                      </div>
-                      
-                      {/* FIXED: Metadata with "None" logic */}
-                      <div style={metadataStyle}>
-                        {[
-                          power.school, 
-                          power.abilityType, 
-                          power.power, 
-                          power.abilityRange,
-                          power.material || "None"
-                        ].filter(Boolean).join(' | ')}
-                      </div>
+                      {/* 1. The Main Power (Border-left style) */}
+                      {renderPowerBlock(power.powerId, false)}
 
-                      {power.incantation && (
-                        <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#333' }}>
-                          "{power.incantation}"{power.incantation_multiplier > 1 ? ` x${power.incantation_multiplier}` : ''}
+                      {/* 2. Any Wildcard selection (Boxed style) */}
+                      {wildcardChoice && (
+                        <div style={{ marginTop: '10px' }}>
+                          {renderPowerBlock(String(wildcardChoice), true)}
                         </div>
                       )}
 
-                      <div style={effectTextStyle}>
-                        {power.effect}
-                      </div>
-
-                      {/* FIXED: Missing Restriction and Note fields */}
-                      {power.limitation && (
-                        <div style={{ ...effectTextStyle, marginTop: '12px' }}>
-                          <strong>Restriction:</strong> {power.limitation}
+                      {/* 3. Any nested References (Boxed style) */}
+                      {power.reference?.map((refId: string) => (
+                        <div key={refId} style={{ marginTop: '10px' }}>
+                          {renderPowerBlock(refId, true)}
                         </div>
-                      )}
-
-                      {power.note && (
-                        <div style={{ ...effectTextStyle, marginTop: '12px' }}>
-                          <strong>Note:</strong> {power.note}
-                        </div>
-                      )}
+                      ))}
                     </div>
                   )}
                 </div>
@@ -276,7 +359,7 @@ const bigControlBtn = {
 const counterValueStyle = { minWidth: '35px', textAlign: 'center' as const, color: '#000', fontWeight: '900' as const, fontSize: '1.4rem' };
 
 const expandedCardStyle = {
-  padding: '20px', backgroundColor: '#fff', border: '2px solid #ddd', borderTop: 'none', margin: '0 2px 10px', borderRadius: '0 0 6px 6px'
+  padding: '20px', backgroundColor: '#ffffff00', border: '2px solid #dddddd00', borderTop: 'none', margin: '0 2px 10px', borderRadius: '0 0 6px 6px'
 };
 
 const metadataStyle = {

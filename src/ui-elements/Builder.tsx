@@ -192,7 +192,7 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
 
       {/* Incantation (If applicable) */}
       {power.incantation && (
-        <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#333', fontSize: '0.95rem' }}>
+        <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#333', fontSize: '0.95rem', whiteSpace: 'pre-line' }}>
           "{power.incantation}"{power.incantation_multiplier > 1 ? ` x${power.incantation_multiplier}` : ''}
         </div>
       )}
