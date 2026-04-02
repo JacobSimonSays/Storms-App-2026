@@ -30,7 +30,7 @@ const Launcher = ({ onStart }: { onStart: (c: string, l: number) => void }) => {
 
       <div style={cardStyle}>
         <div style={fieldGroup}>
-          <label style={labelStyle}>Choose Your Path</label>
+          <label style={labelStyle}>Arm Yourself</label>
           <select 
             value={selClass} 
             onChange={(e) => {

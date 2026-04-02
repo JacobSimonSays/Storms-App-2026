@@ -7,16 +7,16 @@ import { getAvailableAbilities, calculateCosts, getGlobalPowerLevel } from '../l
 interface BuilderProps {
   initialClass: string;
   initialLevel: number;
-  onBack: () => void;
+  existingMap?: Record<string, any>; // The saved ability choices
+  onSave: (map: Record<string, any>) => void;
+  onCancel: () => void;
 }
 
-const Builder: React.FC<BuilderProps> = ({ initialClass, initialLevel, onBack }) => {
-  // --- STATE ---
-  const [selectedMap, setSelectedMap] = useState<Record<string, number | string>>({});
+const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: BuilderProps) => {
+  const [selectedMap, setSelectedMap] = useState<Record<string, number | string>>(existingMap || {});
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [characterName, setCharacterName] = useState("New Hero");
   const [activeWildcardId, setActiveWildcardId] = useState<string | null>(null);
-  const [showSaveModal, setShowSaveModal] = useState(false);
 
   const theme = CLASS_THEMES[initialClass] || CLASS_THEMES.Barbarian;
 
@@ -42,6 +42,10 @@ const Builder: React.FC<BuilderProps> = ({ initialClass, initialLevel, onBack })
       [`${wildcardId}_choice`]: choiceId
     }));
     closeWildcardModal();
+  };
+
+  const handleFinish = () => {
+    onSave(selectedMap);
   };
 
   const updateQuantity = (id: string, delta: number) => {
@@ -289,12 +293,12 @@ const Builder: React.FC<BuilderProps> = ({ initialClass, initialLevel, onBack })
                       {/* 1. THE MAIN POWER (Clean, Big, No Box) */}
                       <div style={{ marginBottom: '20px' }}>
                         {/* Frequency & Metadata Bar */}
-                        <div style={{ fontStyle: 'italic', fontSize: '1.1rem', marginBottom: '4px' }}>
+                        <div style={{ fontStyle: 'italic', fontSize: '1.5rem', marginBottom: '4px' }}>
                           {ability.frequency}{ability.charge ? `; Charge` : ''}
                         </div>
                         <div style={{ 
                           color: '#4b4b4b', 
-                          fontSize: '1rem', // SLIGHTLY BIGGER
+                          fontSize: '1.05rem', // SLIGHTLY BIGGER
                           borderBottom: '1px solid #ccc', 
                           paddingBottom: '6px', 
                           marginBottom: '10px',
@@ -306,6 +310,18 @@ const Builder: React.FC<BuilderProps> = ({ initialClass, initialLevel, onBack })
                         <div style={{ fontSize: '1.15rem', lineHeight: '1.6', whiteSpace: 'pre-line' }}>
                           {formatText(ability.effect)}
                         </div>
+                        {/* Note Field */}
+                          {ability.note && (
+                            <div style={{ fontSize: '1.15rem', lineHeight: '1.6', marginTop: '12px', whiteSpace: 'pre-line' }}>
+                              <strong>Note:</strong> {formatText(ability.note)}
+                            </div>
+                          )}
+                        {/* Limitation Field */}
+                          {ability.limitation && (
+                            <div style={{ fontSize: '1.15rem', lineHeight: '1.6', marginTop: '12px', whiteSpace: 'pre-line' }}>
+                              <strong>Restriction:</strong> {formatText(ability.limitation)}
+                            </div>
+                          )}                                       
                       </div>
 
                       {/* 2. THE SUB-POWERS (Using the existing boxed-in Reference Block) */}
@@ -359,26 +375,59 @@ const Builder: React.FC<BuilderProps> = ({ initialClass, initialLevel, onBack })
             }}
           />
         </div>
-        <button 
-          onClick={saveArsenal} 
-          style={{
-            backgroundColor: 'rgb(2, 38, 88)',
-            color: 'white',
-            border: 'none',
-            padding: '18px 50px',
-            fontSize: '1.2rem',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-            fontFamily: "'HeaderFont', serif",
-            boxShadow: '0 6px 15px rgba(0,0,80,0.3)',
-            transition: 'transform 0.1s'
-          }}
-          onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.98)'}
-          onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
-        >
-          Save Arsenal
-        </button>
+        <div style={{ 
+          display: 'flex', 
+          gap: '15px', 
+          marginTop: '30px', 
+          width: '100%', 
+          justifyContent: 'center' 
+        }}>
+          {/* The Save/Update Button */}
+          <button 
+            onClick={saveArsenal} 
+            style={{
+              backgroundColor: 'rgb(2, 38, 88)',
+              color: 'white',
+              border: 'none',
+              padding: '18px 40px', // Slightly narrower to fit two buttons
+              fontSize: '1.2rem',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontFamily: "'HeaderFont', serif",
+              boxShadow: '0 6px 15px rgba(0,0,80,0.3)',
+              transition: 'transform 0.1s',
+              flex: 2 // Gives the primary action more "weight"
+            }}
+            onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.98)'}
+            onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+          >
+            {existingMap ? 'Update Arsenal' : 'Save Arsenal'}
+          </button>
+
+          {/* The Cancel Button */}
+          <button 
+            onClick={onCancel} 
+            style={{
+              backgroundColor: '#666', // Neutral gray
+              color: 'white',
+              border: 'none',
+              padding: '18px 20px',
+              fontSize: '1.1rem',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontWeight: 'normal',
+              fontFamily: "'HeaderFont', serif",
+              boxShadow: '0 4px 10px rgba(0,0,0,0.2)',
+              transition: 'transform 0.1s',
+              flex: 1
+            }}
+            onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.98)'}
+            onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   );

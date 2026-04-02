@@ -10,8 +10,10 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [deathTimer, setDeathTimer] = useState<number | null>(null);
   const [stateTimer, setStateTimer] = useState<number | null>(null);
-  const [showRespawnModal, setShowRespawnModal] = useState(false);
   const [utilityTimer, setUtilityTimer] = useState<number | null>(null);
+  const [showRespawnModal, setShowRespawnModal] = useState(false);
+
+  // Initialize charges based on /Life or /Skirmish frequencies
   const [charges, setCharges] = useState<Record<string, number>>(() => {
     const initial: Record<string, number> = {};
     ALL_ABILITIES.forEach(a => {
@@ -24,6 +26,7 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
     return initial;
   });
 
+  // Single Interval for all timers
   useEffect(() => {
     const interval = setInterval(() => {
       setUtilityTimer(t => (t && t > 0 ? t - 1 : null));
@@ -42,6 +45,7 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
         resetCharges[a.powerId] = baseUses * purchaseCount;
       }
     });
+    setCharges(resetCharges);
     setUtilityTimer(null);
     setDeathTimer(null);
     setStateTimer(null);
@@ -67,7 +71,7 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
 
     return owned.reduce((acc, ability) => {
       const tier = mapping.find((m: any) => m.powerId === ability.powerId);
-      const lvl = tier ? tier.level : 'Borrowed';
+      const lvl = tier ? tier.level : 'Misc'; // Changed 'Borrowed' to 'Misc' for cleaner sorting
       if (lvl === 0 || lvl === '0') return acc;
       if (!acc[lvl]) acc[lvl] = [];
       acc[lvl].push(ability);
@@ -76,69 +80,36 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
   }, [arsenal]);
 
   return (
-    <div style={{ width: '100%', minHeight: '100vh', paddingBottom: '40px' }}>
+    <div style={{ width: '100%', minHeight: '100vh', paddingBottom: '40px', backgroundColor: '#f5f5f5' }}>
       
-      {/* --- FIXED INTERFACE BLOCK --- */}
-      <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, boxShadow: '0 4px 15px rgba(0,0,0,0.4)' }}>
-        
-        {/* 1. TOP HEADER (The Identity) */}
-        <header style={{ 
-          backgroundColor: theme.dark, color: theme.text, 
-          padding: '10px', textAlign: 'center', height: '60px', 
-          display: 'flex', flexDirection: 'column', justifyContent: 'center',
-          borderBottom: '1px solid rgba(255,255,255,0.1)'
-        }}>
-          <h1 style={{ margin: 0, fontFamily: "'HeaderFont', serif", fontSize: '1.4rem' }}>
-            {arsenal.name}
-          </h1>
+      <div style={fixedInterfaceBlock}>
+        <header style={{ ...headerStyle, backgroundColor: theme.dark, color: theme.text }}>
+          <h1 style={headerTitle}>{arsenal.name}</h1>
           <div style={{ opacity: 0.8, fontSize: '0.75rem' }}>
             {arsenal.className} • Level {arsenal.level}
           </div>
         </header>
 
-        {/* 2. STICKY CONTROLS (The Actions) */}
-        <div style={{ 
-          backgroundColor: '#fdfaf3', 
-          padding: '10px', 
-          display: 'grid', 
-          gridTemplateColumns: '1fr 1fr', 
-          gap: '10px' 
-        }}>
-          {/* Row 1: The Quick Timers */}
+        <div style={stickyControlsGrid}>
           <button onClick={() => setUtilityTimer(10)} style={gridBtnStyle(!!utilityTimer)}>
             {utilityTimer ? `${utilityTimer}s` : '10s'}
           </button>
-          
           <button onClick={() => setStateTimer(25)} style={gridBtnStyle(!!stateTimer)}>
             {stateTimer ? `${stateTimer}s` : '25s'}
           </button>
-
-          {/* Row 2: The Long Timer & Reset */}
           <button onClick={() => setDeathTimer(55)} style={gridBtnStyle(!!deathTimer)}>
             {deathTimer ? `${deathTimer}s` : '55s'}
           </button>
-
           <button onClick={() => setShowRespawnModal(true)} style={gridBtnStyle(false)}>
-            <div style={{ 
-              fontFamily: 'serif', 
-              fontSize: '1.8rem',  // Scales the entire glyph
-              transform: 'scale(1.3, 1)', // Widen it slightly
-              fontWeight: '900', // Forces maximum font weight
-              textShadow: '2px 2px 2px #000', // Darker shadow adds thickness
-              marginTop: '-5px' 
-            }}>
-              ↻
-            </div>
+            <div style={respawnIconStyle}>↻</div>
           </button>
         </div>
       </div>
 
-      {/* --- SCROLLABLE POWERS --- */}
-      {/* Pushed down by the combined height of the fixed header/controls (~210px) */}
       <main style={{ paddingTop: '215px', paddingLeft: '10px', paddingRight: '10px' }}>
         {Object.keys(groupedAbilities).sort().map(lvl => (
           <div key={lvl}>
-            <h3 style={levelHeaderStyle}>{`Level ${lvl}`}</h3>
+            <h3 style={levelHeaderStyle}>{lvl === 'Misc' ? 'Other Abilities' : `Level ${lvl}`}</h3>
 
             {groupedAbilities[lvl].map(power => {
               const isExpanded = expandedIds.has(power.powerId);
@@ -152,18 +123,9 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
                        next.has(power.powerId) ? next.delete(power.powerId) : next.add(power.powerId);
                        setExpandedIds(next);
                     }} 
-                    style={{
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      padding: '24px 15px', backgroundColor: theme.dark, borderRadius: '6px',
-                      boxShadow: 'inset 0 0 12px rgba(0,0,0,0.4)', borderBottom: `3px solid rgba(0,0,0,0.3)`
-                    }}
+                    style={{ ...powerRowStyle, backgroundColor: theme.dark }}
                   >
-                    <span style={{ 
-                      fontFamily: "'HeaderFont', serif", fontSize: '1.4rem', color: '#fff',
-                      textShadow: '1px 1px 2px #000'
-                    }}>
-                      {power.name}
-                    </span>
+                    <span style={powerNameStyle}>{power.name}</span>
 
                     <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center' }}>
                       {currentUses !== undefined && (
@@ -175,17 +137,46 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
                       )}
                     </div>
                   </div>
+
                   {isExpanded && (
                     <div style={expandedCardStyle}>
-                      <div style={{ fontStyle: 'italic', fontSize: '0.9rem', color: '#444', marginBottom: '6px' }}>
+                      <div style={frequencySubStyle}>
                         {power.frequency} {power.charge ? ' | Charge' : ''}
                       </div>
+                      
+                      {/* FIXED: Metadata with "None" logic */}
                       <div style={metadataStyle}>
-                        {[power.school, power.abilityType, power.power, power.abilityRange].filter(Boolean).join(' | ')}
+                        {[
+                          power.school, 
+                          power.abilityType, 
+                          power.power, 
+                          power.abilityRange,
+                          power.material || "None"
+                        ].filter(Boolean).join(' | ')}
                       </div>
-                      <div style={{ fontSize: '1.1rem', lineHeight: '1.5', whiteSpace: 'pre-line', color: '#000', fontFamily: "'BodyFont', serif" }}>
+
+                      {power.incantation && (
+                        <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#333' }}>
+                          "{power.incantation}"{power.incantation_multiplier > 1 ? ` x${power.incantation_multiplier}` : ''}
+                        </div>
+                      )}
+
+                      <div style={effectTextStyle}>
                         {power.effect}
                       </div>
+
+                      {/* FIXED: Missing Restriction and Note fields */}
+                      {power.limitation && (
+                        <div style={{ ...effectTextStyle, marginTop: '12px' }}>
+                          <strong>Restriction:</strong> {power.limitation}
+                        </div>
+                      )}
+
+                      {power.note && (
+                        <div style={{ ...effectTextStyle, marginTop: '12px' }}>
+                          <strong>Note:</strong> {power.note}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -195,7 +186,6 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
         ))}
       </main>
 
-      {/* RESPAWN MODAL */}
       {showRespawnModal && (
         <div style={modalOverlay}>
           <div style={modalCard}>
@@ -209,34 +199,63 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
         </div>
       )}
     </div>
-    
   );
 };
 
 // --- STYLES ---
 
-const gridBtnStyle = (active: boolean) => {
-  const navyBase = 'rgb(2, 38, 88)';
-  const navyActive = 'rgb(45, 85, 145)';
-
-  return {
-    padding: '22px 0',
-    backgroundColor: active ? navyActive : navyBase,
-    color: '#fff',
-    border: active ? '2px solid rgba(255,255,255,0.4)' : 'none',
-    borderRadius: '8px',
-    fontFamily: "'TitleFont', serif",
-    fontSize: '1.6rem', // Big numbers for big thumbs
-    fontWeight: '900' as const,
-    textShadow: '1px 1px 2px #000',
-    cursor: 'pointer',
-    boxShadow: active ? 'inset 0 0 12px rgba(0,0,0,0.5)' : '0 4px 6px rgba(0,0,0,0.2)',
-    transition: 'all 0.1s ease',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center'
-  };
+const fixedInterfaceBlock: React.CSSProperties = {
+  position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, boxShadow: '0 4px 15px rgba(0,0,0,0.4)'
 };
+
+const headerStyle: React.CSSProperties = {
+  padding: '10px', textAlign: 'center', height: '60px', 
+  display: 'flex', flexDirection: 'column', justifyContent: 'center',
+  borderBottom: '1px solid rgba(255,255,255,0.1)'
+};
+
+const headerTitle: React.CSSProperties = { margin: 0, fontFamily: "'HeaderFont', serif", fontSize: '1.4rem' };
+
+const stickyControlsGrid: React.CSSProperties = {
+  backgroundColor: '#fdfaf3', padding: '10px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px'
+};
+
+const powerRowStyle: React.CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  padding: '24px 15px', borderRadius: '6px',
+  boxShadow: 'inset 0 0 12px rgba(0,0,0,0.4)', borderBottom: `3px solid rgba(0,0,0,0.3)`
+};
+
+const powerNameStyle: React.CSSProperties = {
+  fontFamily: "'HeaderFont', serif", fontSize: '1.4rem', color: '#fff', textShadow: '1px 1px 2px #000'
+};
+
+const frequencySubStyle = { fontStyle: 'italic', fontSize: '0.9rem', color: '#444', marginBottom: '6px' };
+
+const effectTextStyle: React.CSSProperties = {
+  fontSize: '1.1rem', lineHeight: '1.5', whiteSpace: 'pre-line', color: '#000', fontFamily: "'BodyFont', serif"
+};
+
+const respawnIconStyle: React.CSSProperties = {
+  fontFamily: 'serif', fontSize: '1.8rem', transform: 'scale(1.3, 1)', 
+  fontWeight: '900', textShadow: '2px 2px 2px #000', marginTop: '-5px'
+};
+
+const gridBtnStyle = (active: boolean) => ({
+  padding: '22px 0',
+  backgroundColor: active ? 'rgb(45, 85, 145)' : 'rgb(2, 38, 88)',
+  color: '#fff',
+  border: active ? '2px solid rgba(255,255,255,0.4)' : 'none',
+  borderRadius: '8px',
+  fontFamily: "'TitleFont', serif",
+  fontSize: '1.6rem',
+  fontWeight: '900' as const,
+  textShadow: '1px 1px 2px #000',
+  cursor: 'pointer',
+  boxShadow: active ? 'inset 0 0 12px rgba(0,0,0,0.5)' : '0 4px 6px rgba(0,0,0,0.2)',
+  transition: 'all 0.1s ease',
+  display: 'flex', alignItems: 'center', justifyContent: 'center'
+} as React.CSSProperties);
 
 const levelHeaderStyle = {
   backgroundColor: 'rgba(0,0,0,0.1)', padding: '10px 15px', 
@@ -245,51 +264,35 @@ const levelHeaderStyle = {
 };
 
 const counterContainerStyle = {
-  display: 'flex', alignItems: 'center', 
-  backgroundColor: '#fdfaf3', // Light creamy background for maximum black text contrast
-  borderRadius: '6px', overflow: 'hidden',
-  boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-  border: '1px solid rgba(0,0,0,0.2)'
+  display: 'flex', alignItems: 'center', backgroundColor: '#fdfaf3', 
+  borderRadius: '6px', overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.3)', border: '1px solid rgba(0,0,0,0.2)'
 };
 
 const bigControlBtn = {
-  background: 'none', border: 'none', color: '#000', 
-  fontSize: '1.8rem', padding: '8px 16px', 
-  cursor: 'pointer', fontWeight: '900' as const,
-  backgroundColor: 'rgba(0,0,0,0.05)'
+  background: 'none', border: 'none', color: '#000', fontSize: '1.8rem', padding: '8px 16px', 
+  cursor: 'pointer', fontWeight: '900' as const, backgroundColor: 'rgba(0,0,0,0.05)'
 };
 
-const counterValueStyle = {
-  minWidth: '35px', textAlign: 'center' as const, 
-  color: '#000', fontWeight: '900' as const, 
-  fontSize: '1.4rem'
-};
+const counterValueStyle = { minWidth: '35px', textAlign: 'center' as const, color: '#000', fontWeight: '900' as const, fontSize: '1.4rem' };
 
 const expandedCardStyle = {
-  padding: '20px', backgroundColor: '#fff', 
-  border: '2px solid #ddd', borderTop: 'none', 
-  margin: '0 2px 10px', borderRadius: '0 0 6px 6px'
+  padding: '20px', backgroundColor: '#fff', border: '2px solid #ddd', borderTop: 'none', margin: '0 2px 10px', borderRadius: '0 0 6px 6px'
 };
 
 const metadataStyle = {
-  fontSize: '0.85rem', borderBottom: '1px solid #bbb', 
-  paddingBottom: '8px', marginBottom: '12px', opacity: 0.7, color: '#333'
+  fontSize: '0.85rem', borderBottom: '1px solid #bbb', paddingBottom: '8px', marginBottom: '12px', opacity: 0.7, color: '#333'
 };
 
 const modalOverlay: React.CSSProperties = {
-  position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-  backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200
+  position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200
 };
 
 const modalCard = {
-  backgroundColor: '#fdfaf3', padding: '30px 20px', borderRadius: '12px', 
-  textAlign: 'center' as const, width: '85%', maxWidth: '350px', border: '3px solid #4a3f35'
+  backgroundColor: '#fdfaf3', padding: '30px 20px', borderRadius: '12px', textAlign: 'center' as const, width: '85%', maxWidth: '350px', border: '3px solid #4a3f35'
 };
 
 const modalBtn = (isYes: boolean) => ({
-  flex: 1, padding: '16px', border: 'none', borderRadius: '6px',
-  backgroundColor: isYes ? '#4a3f35' : '#888',
-  color: '#fff', fontFamily: "'HeaderFont', serif", fontSize: '1.2rem'
-});
+  flex: 1, padding: '16px', border: 'none', borderRadius: '6px', backgroundColor: isYes ? '#4a3f35' : '#888', color: '#fff', fontFamily: "'HeaderFont', serif", fontSize: '1.2rem'
+} as React.CSSProperties);
 
 export default CombatScreen;
