@@ -75,17 +75,6 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
     }, {} as Record<string, any[]>);
   }, [arsenal]);
 
-  const [isLocked, setIsLocked] = useState(false);
-    // Optional: Prevent accidental browser "Back" navigation when locked
-    useEffect(() => {
-      if (isLocked) {
-        window.onbeforeunload = () => "Are you sure you want to leave the skirmish?";
-      } else {
-        window.onbeforeunload = null;
-      }
-      return () => { window.onbeforeunload = null; };
-    }, [isLocked]);
-
   return (
     <div style={{ width: '100%', minHeight: '100vh', paddingBottom: '40px' }}>
       
@@ -186,7 +175,6 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
                       )}
                     </div>
                   </div>
-
                   {isExpanded && (
                     <div style={expandedCardStyle}>
                       <div style={{ fontStyle: 'italic', fontSize: '0.9rem', color: '#444', marginBottom: '6px' }}>
