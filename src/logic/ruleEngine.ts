@@ -1,12 +1,12 @@
-import { ALL_ABILITIES, type Ability } from '../data/allAbilities.ts';
+import { ALL_POWERS, type Power } from '../data/allPowers.ts';
 import { CLASS_DATA } from '../data/classData.ts';
-
+import { ARCHETYPE_RULES } from '../logic/archetype_rules.ts';
 
 // --- INTERFACES ---
 
 export interface Slot {
   isFilled: boolean;
-  powerId: string | null;
+  id: string | null;
   cost: number;
 }
 
@@ -16,7 +16,7 @@ export interface SlotBucket {
 }
 
 export interface ManifestEntry {
-  powerId: string;
+  id: string;
   displayMode: 'auto' | 'purchasable' | 'archetype' | 'wildcard';
   selectionType: 'none' | 'counter' | 'toggle' | 'dropdown';
   canIncrease: boolean; 
@@ -32,42 +32,32 @@ export interface CharacterManifest {
   className: string;
   level: number;
   isMartial: boolean;
-  abilities: Record<string, ManifestEntry>;
+  powers: Record<string, ManifestEntry>;
   resourceBuckets: SlotBucket[];
   isValid: boolean; 
   errors: string[];
 }
 
-export const getAutoTraits = (className: string, userLevel: number): string[] => {
-  const classInfo = (CLASS_DATA.classes as any)[className];
-  if (!classInfo) return [];
-  const isMartial = classInfo.ruleSet === 'martial';
+// --- HELPERS ---
 
-  return classInfo.tierMapping
-    .filter((m: any) => {
-      // Level 0 is always auto
-      if (m.level === 0 || m.level === '0') return true;
-      // Martials get everything below level 5 automatically
-      if (isMartial && m.level <= userLevel && m.level < 5) return true;
-      return false;
-    })
-    .map((m: any) => m.powerId);
-};
-
-const parseFrequency = (freq: string | undefined) => {
+const parseFrequency = (freq: string | undefined, multiplier: number = 1) => {
   if (!freq) return { isTracked: false, total: 0, reset: 'none' };
   const lower = freq.toLowerCase();
   const match = lower.match(/(\d+)\/(life|skirmish)/);
   if (match) {
-    return { isTracked: true, total: parseInt(match[1]), reset: match[2] };
+    return { 
+      isTracked: true, 
+      total: Math.floor(parseInt(match[1]) * multiplier), 
+      reset: match[2] 
+    };
   }
   return { isTracked: false, total: 0, reset: 'none' };
 };
 
-export const getGlobalPowerLevel = (powerId: string): number => {
+export const getGlobalPowerLevel = (id: string): number => {
   let lowestLevel = 99;
   Object.values(CLASS_DATA.classes).forEach((cls: any) => {
-    const mapping = cls.tierMapping.find((m: any) => m.powerId === powerId);
+    const mapping = cls.tierMapping.find((m: any) => m.powerId === id || m.powerId === id.split('_').slice(1).join('_'));
     if (mapping && mapping.level > 0 && mapping.level < lowestLevel) {
       lowestLevel = mapping.level;
     }
@@ -75,136 +65,159 @@ export const getGlobalPowerLevel = (powerId: string): number => {
   return lowestLevel;
 };
 
-export const getAvailableAbilities = (className: string, userLevel: number): Ability[] => {
+export const getAvailablePowers = (className: string, userLevel: number): Power[] => {
   const classInfo = (CLASS_DATA.classes as any)[className];
   if (!classInfo) return [];
-  return ALL_ABILITIES.filter(ability => {
-    if (ability.inactive) return false;
-    const mapping = classInfo.tierMapping.find((m: any) => m.powerId === ability.powerId);
-    const nativeLevel = mapping ? mapping.level : 99;
-    return nativeLevel <= userLevel;
+  
+  return ALL_POWERS.filter((p: Power) => {
+    if (p.inactive) return false;
+    
+    const mapping = classInfo.tierMapping.find((m: any) => m.powerId === p.id);
+    
+    if (mapping && mapping.level > 0 && mapping.level <= userLevel) return true;
+
+    if (p.className === className && p.origin === 'T' && p.tier === 0) return true;
+
+    return false;
   });
 };
-
-// --- CORE ENGINE ---
 
 export const calculateCosts = (
   className: string, 
   userLevel: number, 
-  selectedMap: Record<string, number | string> // <--- Change 'number' to 'number | string'
+  selectedMap: Record<string, number | string>
 ): CharacterManifest => {
   const classInfo = (CLASS_DATA.classes as any)[className];
   const isMartial = classInfo?.ruleSet === 'martial';
   const errors: string[] = [];
 
-  // 1. Initialize Buckets (Casters only)
+  // 1. IDENTIFY ACTIVE RULES
+  const activeArchId = Object.keys(selectedMap).find(id => ARCHETYPE_RULES.archetypes[id] && Number(selectedMap[id]) > 0);
+  const archRule = activeArchId ? ARCHETYPE_RULES.archetypes[activeArchId] : null;
+
+  const activeWildcards = Object.keys(ARCHETYPE_RULES.wildcards)
+    .filter(id => {
+      const isSelected = Number(selectedMap[id]) > 0;
+      const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === id);
+      return isSelected || (mapping && mapping.level <= userLevel);
+    })
+    .map(id => ({ ...ARCHETYPE_RULES.wildcards[id], id }));
+
+  // 2. PREPARE MODIFIED POWER LIST (Apply Archetype Overrides & Identify Bonuses)
+
+  const availablePowers = ALL_POWERS.filter(p => {
+    if (p.inactive) return false;
+
+    // A: Native Class Powers (Checks your mapping/level)
+    const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === p.id);
+    const isNative = mapping && mapping.level <= userLevel;
+    if (isNative) return true;
+
+    // B: THE FIX: Is it a bonus power granted by an active wildcard?
+    // We check if the current power's ID exists in any active wildcard's bonusPowers array.
+    const isBonusGrant = activeWildcards.some(w => w.bonusPowers?.includes(p.id));
+    if (isBonusGrant) return true;
+
+    // C: Is it a user-selected choice?
+    const isUserChoice = Object.values(selectedMap).includes(p.id);
+    if (isUserChoice) return true;
+
+    return false;
+  }).map(p => {
+    // ... keep your existing .map logic that applies overrides and sets isReference ...
+    const override = archRule?.overrides?.find((o: any) => o.id === p.id);
+    const isBonus = activeWildcards.some(w => w.bonusPowers?.includes(p.id));
+    const chosenPowerId = selectedMap[`${p.id}_choice`] || null;
+
+    return {
+      ...p,
+      cost: override?.cost ?? p.cost ?? 0,
+      freq_multiplier: override?.freq_multiplier ?? p.freq_multiplier ?? 1,
+      arch_restrict: override?.enabled === false ? true : (p.arch_restrict ?? false),
+      isReference: p.isReference || isBonus,
+      wildcardChoice: chosenPowerId
+    };
+  });
+
+  // 3. INITIALIZE BUCKETS
   const buckets: Record<number, SlotBucket> = {};
   if (!isMartial) {
     for (let l = 1; l <= userLevel; l++) {
       buckets[l] = { 
         level: l, 
-        slots: Array(3).fill(null).map(() => ({ isFilled: false, powerId: null, cost: 0 })) 
+        slots: Array(3).fill(null).map(() => ({ isFilled: false, id: null, cost: 0 })) 
       };
     }
   }
 
-  // 2. Prepare powers for the Waterfall
-  const selectedIds = Object.entries(selectedMap)
-    .filter(([id]) => !id.endsWith('_choice')) // Ignore the string-based choices
-    .flatMap(([id, qty]) => Array(Number(qty)).fill(id));
-  const powersToPlace = selectedIds
-    .map(id => {
-      const ability = ALL_ABILITIES.find(a => a.powerId === id);
-      const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === id);
-      const pLvl = mapping ? mapping.level : getGlobalPowerLevel(id);
-      return { ...ability, powerLevel: pLvl, id, isArchetype: ability?.abilityType === 'Archetype' };
+  // 4. THE WATERFALL (Cost > 0 Only)
+  const powersToPlace = availablePowers
+    .filter(p => {
+      const qty = Number(selectedMap[p.id] || 0);
+      return qty > 0 && p.cost > 0;
     })
-    .filter(p => (p.isArchetype || p.power !== "T") && (p.powerLevel ?? 0) > 0)
-    .sort((a, b) => {
-      if (a.isArchetype !== b.isArchetype) return a.isArchetype ? -1 : 1;
-      return (b.powerLevel ?? 0) - (a.powerLevel ?? 0);
-    });
+    .flatMap(p => {
+      const qty = Number(selectedMap[p.id] || 0);
+      const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === p.id);
+      const pLvl = mapping ? mapping.level : (getGlobalPowerLevel(p.id) || 1);
+      
+      // Create an array entry for EVERY purchase of this power
+      return Array(qty).fill(null).map(() => ({ 
+        ...p, 
+        powerLevel: pLvl 
+      }));
+    })
+    .sort((a, b) => b.powerLevel - a.powerLevel);
 
-  // 3. The Packing Waterfall
-  powersToPlace.forEach(power => {
-    if (isMartial) return; // Martials don't consume dots
-    const cost = power.isArchetype ? 2 : 1;
-    const minLvl = power.powerLevel || 1;
-    let placed = false;
-
-    for (let l = minLvl; l <= userLevel; l++) {
+  powersToPlace.forEach(p => {
+    if (isMartial) return;
+    
+    let remaining = p.cost;
+    // Walk through buckets from the power's minimum level up to current level
+    for (let l = p.powerLevel; l <= userLevel; l++) {
       if (!buckets[l]) continue;
-      const availableSlots = buckets[l].slots.filter(s => !s.isFilled);
-      if (availableSlots.length >= cost) {
-        let assigned = 0;
-        buckets[l].slots.forEach(slot => {
-          if (!slot.isFilled && assigned < cost) {
-            slot.isFilled = true;
-            slot.powerId = power.id;
-            slot.cost = 1; // Each slot is 1 dot
-            assigned++;
-          }
-        });
-        placed = true;
-        break; 
-      }
+      
+      buckets[l].slots.forEach(slot => {
+        if (!slot.isFilled && remaining > 0) {
+          slot.isFilled = true;
+          slot.id = p.id;
+          slot.cost = 1; // Each slot represents 1 cost unit
+          remaining--;
+        }
+      });
+      
+      if (remaining === 0) break;
     }
-    if (!placed) errors.push(`Insufficient slots for ${power.name}`);
+    
+    if (remaining > 0) {
+      errors.push(`Insufficient slots for ${p.name}`);
+    }
   });
 
-  // 4. Generate the Manifest
-  const abilities: Record<string, ManifestEntry> = {};
-  const available = getAvailableAbilities(className, userLevel);
+  // 5. GENERATE THE MANIFEST
+  const powersManifest: Record<string, ManifestEntry> = {};
 
-  available.forEach(ability => {
-    const freq = parseFrequency(ability.frequency);
-    const isArchetype = ability.abilityType === 'Archetype';
-    const isTrait = ability.power === 'T';
-    const currentQty = selectedMap[ability.powerId] || 0;
+  availablePowers.forEach(p => {
+    const freq = parseFrequency(p.frequency, p.freq_multiplier);
+    const currentQty = Number(selectedMap[p.id] || 0);
+    const mapping = classInfo.tierMapping.find((m: any) => m.powerId === p.id);
+    const minLvl = mapping ? mapping.level : getGlobalPowerLevel(p.id);
 
-    // Determine Selection Type
-    let selectionType: 'none' | 'counter' | 'toggle' | 'dropdown' = 'none';
-    if (ability.name === "Martial Feat") selectionType = 'dropdown';
-    else if (isArchetype) selectionType = 'toggle';
-    else if (!isMartial && !isTrait) selectionType = 'counter';
+    const totalAvailableSlots = Object.values(buckets)
+      .filter(b => b.level >= minLvl)
+      .reduce((acc, b) => acc + b.slots.filter(s => !s.isFilled).length, 0);
 
-    // Calculate canIncrease
-    let canIncrease = false;
-    if (isMartial) {
-      // Martials: Only 1 Archetype allowed
-      if (isArchetype) {
-        const hasOtherArchetype = Object.keys(selectedMap).some(id => 
-          id !== ability.powerId && 
-          ALL_ABILITIES.find(a => a.powerId === id)?.abilityType === 'Archetype' &&
-          Number(selectedMap[id]) > 0 // <--- Use Number() here
-        );
-        canIncrease = !hasOtherArchetype && currentQty === 0;
-      } else {
-        canIncrease = true; // Everything else is "auto" or free
-      }
-    } else {
-      // Casters: Check bucket space
-      const cost = isArchetype ? 2 : 1;
-      canIncrease = false;
-      const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === ability.powerId);
-      const minLvl = mapping ? mapping.level : getGlobalPowerLevel(ability.powerId);
-      
-      for (let l = minLvl; l <= userLevel; l++) {
-        // THE FIX: Check if the bucket exists BEFORE trying to read .slots
-        if (buckets[l] && buckets[l].slots.filter(s => !s.isFilled).length >= cost) {
-          canIncrease = true;
-          break;
-        }
-      }
-    }
+    // Visibility: Cost 0 powers are 'auto', Cost > 0 are 'purchasable'
+    // Reference powers (passengers) are always 'auto' but selectionType 'none'
+    const isAuto = p.cost === 0 || p.isReference;
 
-    abilities[ability.powerId] = {
-      powerId: ability.powerId,
-      displayMode: isTrait || (isMartial && !isArchetype) ? 'auto' : 'purchasable',
-        selectionType,
-        currentQuantity: Number(currentQty), // <--- Force it to be a number here
-        canIncrease,
-        tracking: {
+    powersManifest[p.id] = {
+      id: p.id,
+      displayMode: isAuto ? 'auto' : 'purchasable',
+      selectionType: p.isReference ? 'none' : (p.name === "Martial Feat" ? 'dropdown' : (p.cost === 2 ? 'toggle' : 'counter')),
+      currentQuantity: currentQty,
+      canIncrease: !isAuto && totalAvailableSlots >= p.cost && !p.arch_restrict,
+      tracking: {
         isTracked: freq.isTracked,
         totalCharges: freq.total,
         resetType: freq.reset as any
@@ -212,12 +225,14 @@ export const calculateCosts = (
     };
   });
 
+  const sortedBuckets = Object.values(buckets).reverse();
+
   return {
     className,
     level: userLevel,
     isMartial,
-    abilities,
-    resourceBuckets: Object.values(buckets).reverse(),
+    powers: powersManifest,
+    resourceBuckets: sortedBuckets,
     isValid: errors.length === 0,
     errors
   };

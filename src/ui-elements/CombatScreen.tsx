@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ALL_ABILITIES } from '../data/allAbilities.ts';
+import { ALL_POWERS, type Power } from '../data/allPowers.ts';
 import { CLASS_DATA } from '../data/classData.ts';
 import { CLASS_THEMES } from '../theme/classThemes.ts';
 import { SavedArsenal } from '../App.tsx';
@@ -16,11 +16,12 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
   // Initialize charges based on /Life or /Skirmish frequencies
   const [charges, setCharges] = useState<Record<string, number>>(() => {
     const initial: Record<string, number> = {};
-    ALL_ABILITIES.forEach(a => {
-      const purchaseCount = Number(arsenal.selectedMap[a.powerId]) || 0;
-      if (purchaseCount > 0 && (a.frequency?.includes('/Life') || a.frequency?.includes('/Skirmish'))) {
-        const baseUses = parseInt(a.frequency) || 1; 
-        initial[a.powerId] = baseUses * purchaseCount;
+    if (!arsenal.manifest) return initial;
+
+    Object.values(arsenal.manifest.powers).forEach(entry => {
+      // Use the tracking object we built in the Rule Engine
+      if (entry.tracking.isTracked) {
+        initial[entry.id] = entry.tracking.totalCharges;
       }
     });
     return initial;
@@ -38,13 +39,13 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
 
   const handleRespawn = () => {
     const resetCharges = { ...charges };
-    ALL_ABILITIES.forEach(a => {
-      if (a.frequency?.includes('/Life')) {
-        const purchaseCount = Number(arsenal.selectedMap[a.powerId]) || 0;
-        const baseUses = parseInt(a.frequency) || 1;
-        resetCharges[a.powerId] = baseUses * purchaseCount;
+    
+    Object.values(arsenal.manifest.powers).forEach(entry => {
+      if (entry.tracking.isTracked && entry.tracking.resetType === 'life') {
+        resetCharges[entry.id] = entry.tracking.totalCharges;
       }
     });
+
     setCharges(resetCharges);
     setUtilityTimer(null);
     setDeathTimer(null);
@@ -53,127 +54,106 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
   };
 
   const updateCharge = (id: string, delta: number) => {
-    const purchaseCount = Number(arsenal.selectedMap[id]) || 0;
-    const power = ALL_ABILITIES.find(a => a.powerId === id);
-    const baseUses = parseInt(power?.frequency || "1") || 1;
-    const maxUses = baseUses * purchaseCount;
+    const entry = arsenal.manifest?.powers[id];
+    if (!entry) return;
 
+    const maxUses = entry.tracking.totalCharges;
     setCharges(prev => ({
       ...prev,
       [id]: Math.min(maxUses, Math.max(0, (prev[id] || 0) + delta))
     }));
   };
 
-  const ownedAbilities = useMemo(() => {
-    const classInfo = (CLASS_DATA.classes as any)[arsenal.className];
-    
-    return ALL_ABILITIES.filter(power => {
-      // 1. Did they explicitly buy it? (Casters/Choices)
-      const isPurchased = (Number(arsenal.selectedMap[power.powerId]) || 0) > 0;
-      
-      // 2. Is it a core class ability for their level? (Martials/Passives)
-      // This checks your tierMapping to see if this power belongs to this class at this level.
-      const isAutomatic = classInfo?.tierMapping?.some(
-        (m: any) => m.powerId === power.powerId && m.level <= arsenal.level &&  m.level > 0
-      );
+  const ownedPowers = useMemo(() => {
+    const manifestPowers = arsenal.manifest?.powers || {};
 
-      return isPurchased || isAutomatic;
+    return ALL_POWERS.filter(power => {
+      const entry = manifestPowers[power.id];
+      if (!entry) return false;
+
+      // displayMode 'auto' = Martials; currentQuantity > 0 = Casters/Bought items
+      return (entry.displayMode === 'auto' || entry.currentQuantity > 0) && power.tier !== 0;
     });
-  }, [arsenal]);
+  }, [arsenal.manifest]);
 
-  const groupedAbilities = useMemo(() => {
+  const groupedPowers = useMemo(() => {
     const classInfo = (CLASS_DATA.classes as any)[arsenal.className];
     const mapping = classInfo?.tierMapping || [];
 
-    // USE THE NEW LIST HERE
-    return ownedAbilities.reduce((acc, ability) => {
-      const tier = mapping.find((m: any) => m.powerId === ability.powerId);
-      
-      // Fallback for Martials: If no tier is found, group under 'Class Abilities'
-      const lvl = tier ? tier.level : 'Class Abilities'; 
+    return ownedPowers.reduce((acc, power) => {
+      const tier = mapping.find((m: any) => m.powerId === power.id);
+      // Use the level from the mapping, or 'traits' for level 0/unmapped items
+      const lvl = tier ? tier.level : 'traits'; 
       
       if (!acc[lvl]) acc[lvl] = [];
-      acc[lvl].push(ability);
+      acc[lvl].push(power);
       return acc;
     }, {} as Record<string, any[]>);
-  }, [ownedAbilities, arsenal.className]); // Update dependencies
+  }, [ownedPowers, arsenal.className]);
 
-  const renderPowerBlock = (powerId: string, isReference = false) => {
-    const power = ALL_ABILITIES.find(a => a.powerId === powerId);
+  // 3. Corrected Power Block (Design & Lowercase)
+  const renderPowerBlock = (id: string, isReference = false) => {
+    const power = ALL_POWERS.find(a => a.id === id);
     if (!power) return null;
 
-    // 1. MAIN POWER: Clean, Open, No Border-Left, No Box
     if (!isReference) {
       return (
-        <div key={powerId} style={{ marginBottom: '20px' }}>
-          {/* Frequency & Charge */}
-          <div style={{ fontStyle: 'italic', fontSize: '1.5rem', marginBottom: '4px', color: '#444' }}>
+        <div key={id} style={{ marginBottom: '20px' }}>
+          <div style={{ fontStyle: 'italic', fontSize: '1.5rem', marginBottom: '4px', color: '#000' }}>
             {power.frequency}{power.charge ? `; Charge` : ''}
           </div>
 
-          {/* Metadata Bar */}
-          <div style={{ 
-            color: '#4b4b4b', 
-            fontSize: '1.05rem', 
-            borderBottom: '1px solid #ccc', 
-            paddingBottom: '6px', 
-            marginBottom: '10px' 
-          }}>
-            {[power.school, power.abilityType, power.power, power.abilityRange, power.material].filter(Boolean).join(' | ')}
+          <div style={{ color: '#000', fontSize: '1.05rem', borderBottom: '1px solid #ccc', paddingBottom: '6px', marginBottom: '10px' }}>
+            {[power.school, power.type, power.origin, power.range, power.material].filter(Boolean).join(' | ')}
           </div>
 
-          {/* Incantation */}
           {power.incantation && (
-            <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#333', fontSize: '1.05rem', whiteSpace: 'pre-line' }}>
-              "{power.incantation}"{power.incantation_multiplier > 1 ? ` x${power.incantation_multiplier}` : ''}
+            <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#000', fontSize: '1.05rem', whiteSpace: 'pre-line' }}>
+              {power.incantation} {power.incantation_multiplier > 1 ? ` x${power.incantation_multiplier}` : ''}
             </div>
           )}
 
-          {/* Main Effect Body - Big Text */}
           <div style={{ fontSize: '1.15rem', lineHeight: '1.6', whiteSpace: 'pre-line', color: '#000' }}>
             {power.effect}
           </div>
 
-          {/* Notes & Restrictions */}
           {power.note && (
             <div style={{ fontSize: '1.15rem', lineHeight: '1.6', marginTop: '12px' }}>
-              <strong>Note:</strong> {power.note}
+              <strong>note:</strong> {power.note}
             </div>
           )}
           {power.limitation && (
             <div style={{ fontSize: '1.15rem', lineHeight: '1.6', marginTop: '12px' }}>
-              <strong>Restriction:</strong> {power.limitation}
+              <strong>restriction:</strong> {power.limitation}
             </div>
           )}
         </div>
       );
     }
 
-    // 2. REFERENCE BLOCK: Grey Box, Indented, Bordered
-    return (
-      <div key={powerId} style={{ 
-        backgroundColor: 'rgba(0,0,0,0.05)', 
-        border: `1px solid ${theme.dark}44`, 
-        padding: '15px', 
-        borderRadius: '6px', 
-        marginTop: '15px',
-        borderLeft: `4px solid ${theme.dark}` // The bar only lives here!
-      }}>
-        <div style={{ fontSize: '1.1rem', fontFamily: "'HeaderFont', serif", color: theme.dark, marginBottom: '4px', textTransform: 'uppercase' }}>
-          {power.name}
+    // Reference block (Boxed style)
+      return (
+        <div key={id} style={{ 
+          backgroundColor: 'rgba(0,0,0,0.05)', 
+          border: `1px solid ${theme.dark}44`, 
+          padding: '15px', 
+          borderRadius: '6px', 
+          marginTop: '15px',
+          borderLeft: `4px solid ${theme.dark}`
+        }}>
+          {/* NO textTransform: 'uppercase' here */}
+          <div style={{ fontSize: '1.1rem', fontFamily: "'HeaderFont', serif", color: theme.dark, marginBottom: '4px' }}>
+            {power.name}
+          </div>
+          <div style={{ fontStyle: 'italic', marginBottom: '4px', fontSize: '0.9rem' }}>
+            {power.frequency}{power.charge ? `; Charge` : ''}
+          </div>
+          <div style={{ fontSize: '0.95rem', whiteSpace: 'pre-line', color: '#000' }}>
+            {power.effect}
+          </div>
         </div>
-        <div style={{ fontStyle: 'italic', marginBottom: '4px', fontSize: '0.9rem' }}>
-          {power.frequency}{power.charge ? `; Charge` : ''}
-        </div>
-        <div style={{ fontSize: '0.85rem', opacity: 0.7, borderBottom: '1px solid #ccc', marginBottom: '8px', paddingBottom: '4px' }}>
-          {[power.school, power.abilityType, power.power, power.abilityRange, power.material].filter(Boolean).join(' | ')}
-        </div>
-        <div style={{ fontSize: '0.95rem', whiteSpace: 'pre-line', color: '#000' }}>
-          {power.effect}
-        </div>
-      </div>
-    );
-  };
+      );
+    };
 
   return (
     <div style={{ 
@@ -208,22 +188,22 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
       </div>
 
       <main style={{ paddingTop: '215px', paddingLeft: '10px', paddingRight: '10px' }}>
-        {Object.keys(groupedAbilities).sort().map(lvl => (
+        {Object.keys(groupedPowers).sort().map(lvl => (
           <div key={lvl}>
-            <h3 style={levelHeaderStyle}>{lvl === 'Class Abilities' ? lvl : `Level ${lvl}`}</h3>
+            <h3 style={levelHeaderStyle}>{lvl === 'Class Powers' ? lvl : `Level ${lvl}`}</h3>
 
-            {groupedAbilities[lvl].map(power => {
-              const isExpanded = expandedIds.has(power.powerId);
-              const currentUses = charges[power.powerId];
-              const wildcardChoice = arsenal.selectedMap[`${power.powerId}_choice`];
+            {groupedPowers[lvl].map(power => {
+              const isExpanded = expandedIds.has(power.id);
+              const currentUses = charges[power.id];
+              const wildcardChoice = arsenal.selectedMap[`${power.id}_choice`];
 
               return (
-                <div key={power.powerId} style={{ marginBottom: '8px' }}>
+                <div key={power.id} style={{ marginBottom: '8px' }}>
                   {/* THE CLICKABLE ROW */}
                   <div 
                     onClick={() => {
                       const next = new Set(expandedIds);
-                      next.has(power.powerId) ? next.delete(power.powerId) : next.add(power.powerId);
+                      next.has(power.id) ? next.delete(power.id) : next.add(power.id);
                       setExpandedIds(next);
                     }} 
                     style={{ ...powerRowStyle, backgroundColor: theme.dark }}
@@ -231,13 +211,20 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
                     <span style={powerNameStyle}>{power.name}</span>
 
                     <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center' }}>
-                      {currentUses !== undefined && (
-                        <div style={counterContainerStyle}>
-                          <button onClick={() => updateCharge(power.powerId, -1)} style={bigControlBtn}>−</button>
-                          <span style={counterValueStyle}>{currentUses}</span>
-                          <button onClick={() => updateCharge(power.powerId, 1)} style={bigControlBtn}>+</button>
-                        </div>
-                      )}
+                      {(() => {
+                        const entry = arsenal.manifest?.powers[power.id];
+                        const isTracked = entry?.tracking.isTracked;
+                        
+                        return isTracked && (
+                          <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center' }}>
+                            <div style={counterContainerStyle}>
+                              <button onClick={() => updateCharge(power.id, -1)} style={bigControlBtn}>−</button>
+                              <span style={counterValueStyle}>{charges[power.id] ?? 0}</span>
+                              <button onClick={() => updateCharge(power.id, 1)} style={bigControlBtn}>+</button>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -245,7 +232,7 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
                   {isExpanded && (
                     <div style={expandedCardStyle}>
                       {/* 1. The Main Power (Border-left style) */}
-                      {renderPowerBlock(power.powerId, false)}
+                      {renderPowerBlock(power.id, false)}
 
                       {/* 2. Any Wildcard selection (Boxed style) */}
                       {wildcardChoice && (
@@ -273,7 +260,7 @@ const CombatScreen = ({ arsenal }: { arsenal: SavedArsenal }) => {
         <div style={modalOverlay}>
           <div style={modalCard}>
             <h2 style={{ fontFamily: "'HeaderFont', serif", fontSize: '2.2rem' }}>Respawn?</h2>
-            <p style={{ fontSize: '1.1rem', marginBottom: '25px' }}>Reset per-life charges and clear timers.</p>
+            <p style={{ fontSize: '1.1rem', marginBottom: '25px' }}>Reset per-life Powers and clear timers.</p>
             <div style={{ display: 'flex', gap: '15px' }}>
               <button onClick={handleRespawn} style={modalBtn(true)}>Yes</button>
               <button onClick={() => setShowRespawnModal(false)} style={modalBtn(false)}>No</button>

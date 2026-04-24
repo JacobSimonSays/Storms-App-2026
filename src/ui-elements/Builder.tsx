@@ -1,13 +1,14 @@
 import React, { useState, useMemo } from 'react';
-import { ALL_ABILITIES } from '../data/allAbilities.ts';
+import { ALL_POWERS, type Power } from '../data/allPowers.ts';
 import { CLASS_DATA } from '../data/classData.ts';
 import { CLASS_THEMES } from '../theme/classThemes.ts';
-import { getAvailableAbilities, calculateCosts, getGlobalPowerLevel } from '../logic/ruleEngine.ts';
+import { getAvailablePowers, calculateCosts, getGlobalPowerLevel } from '../logic/ruleEngine.ts';
+import { ARCHETYPE_RULES } from '../logic/archetype_rules.ts';
 
 interface BuilderProps {
   initialClass: string;
   initialLevel: number;
-  existingMap?: Record<string, any>; // The saved ability choices
+  existingMap?: Record<string, any>; // The saved power choices
   onSave: (map: Record<string, any>) => void;
   onCancel: () => void;
 }
@@ -21,7 +22,7 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
   const theme = CLASS_THEMES[initialClass] || CLASS_THEMES.Barbarian;
 
   // 1. DATA FETCHING & MANIFEST CALL
-  const available = useMemo(() => getAvailableAbilities(initialClass, initialLevel), [initialClass, initialLevel]);
+  const available = useMemo(() => getAvailablePowers(initialClass, initialLevel), [initialClass, initialLevel]);
   
   // Cast selectedMap to Record<string, number> for the engine, it will ignore string choice keys
   const stats = calculateCosts(initialClass, initialLevel, selectedMap as Record<string, number>);
@@ -36,6 +37,21 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
   const openWildcardModal = (id: string) => setActiveWildcardId(id);
   const closeWildcardModal = () => setActiveWildcardId(null);
 
+  const getWildcardOptions = (wildcardId: string) => {
+    const rule = ARCHETYPE_RULES.wildcards[wildcardId];
+    if (!rule) return [];
+
+    return ALL_POWERS.filter(p => {
+      if (p.inactive) return false;
+      // THE FIX: If it's a bonus power, ignore class/origin/tier gates
+      const isExplicitBonus = rule.bonusPowers?.includes(p.id);
+      const matchesCriteria = rule.allowedClasses.includes(p.className) &&
+                              rule.allowedOrigins.includes(p.origin) &&
+                              rule.allowedTiers.includes(p.tier);
+      return isExplicitBonus || matchesCriteria;
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  };
+
   const selectWildcardChoice = (wildcardId: string, choiceId: string) => {
     setSelectedMap(prev => ({
       ...prev,
@@ -44,32 +60,28 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
     closeWildcardModal();
   };
 
-  const handleFinish = () => {
-    onSave(selectedMap);
-  };
-
   const updateQuantity = (id: string, delta: number) => {
-    const entry = stats.abilities[id];
+    const entry = stats.powers[id];
     if (!entry) return;
 
     setSelectedMap(prev => {
       const current = Number(prev[id]) || 0;
 
-      // Toggle Logic (Archetypes)
       if (entry.selectionType === 'toggle') {
         const isTurningOn = current === 0;
         if (!isTurningOn) return { ...prev, [id]: 0 };
         if (!entry.canIncrease) return prev; 
 
+        // If turning on an Archetype, turn off all other Archetypes
         const cleaned = { ...prev };
-        available
-          .filter(a => a.abilityType === 'Archetype')
-          .forEach(a => { cleaned[a.powerId] = 0; });
+        Object.keys(stats.powers).forEach(key => {
+          if (stats.powers[key].selectionType === 'toggle') cleaned[key] = 0;
+        });
 
         return { ...cleaned, [id]: 1 };
       }
 
-      // Counter Logic (Spells/Feats)
+      // Counter logic
       if (delta > 0 && !entry.canIncrease) return prev;
       return { ...prev, [id]: Math.max(0, current + delta) };
     });
@@ -97,14 +109,18 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
     const classInfo = (CLASS_DATA.classes as any)[initialClass];
     const mapping = classInfo?.tierMapping || [];
     
-    return available.reduce((acc, ability: any) => {
-      const tier = mapping.find((m: any) => m.powerId === ability.powerId);
-      const lvl = tier ? tier.level : 'Borrowed'; 
+    return available.reduce((acc, power: Power) => {
+      // FIX: Use powerId to match your CLASS_DATA schema
+      const tierEntry = mapping.find((m: any) => m.powerId === power.id);
+      const lvl = tierEntry ? tierEntry.level : power.tier;
+
+      // Filter out level 0 (innate traits) if you only want purchasable powers
       if (lvl === 0 || lvl === '0') return acc;
+
       if (!acc[lvl]) acc[lvl] = [];
-      acc[lvl].push(ability);
+      acc[lvl].push(power);
       return acc;
-    }, {} as Record<string, any[]>);
+    }, {} as Record<string, Power[]>);
   }, [available, initialClass]);
 
   // 3. VISUAL HELPERS
@@ -128,103 +144,83 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
     ));
   };
 
-  const getFilteredWildcards = (wildcardId: string) => {
-    const nativeIds = available.map(a => a.powerId);
-    return ALL_ABILITIES.filter(ability => {
-      if (nativeIds.includes(ability.powerId)) return false;
-      const powerLevel = getGlobalPowerLevel(ability.powerId);
+  const renderPowerBlock = (id: string, isReference = false) => {
+    const power = ALL_POWERS.find(a => a.id === id);
+    if (!power) return null;
 
-      if (wildcardId === 't_jack_of_all_trades') {
-        const isCasterSchool = ['Cleric', 'Druid', 'Wizard'].includes(ability.school || '');
-        return powerLevel === 1 && (isCasterSchool || ability.powerId === 't_light_armor');
-      }
-      if (wildcardId === 't_master_of_none') {
-        const isCasterSchool = ['Cleric', 'Druid', 'Wizard'].includes(ability.school || '');
-        return powerLevel <= 2 && (isCasterSchool || ability.abilityType === 'Martial Feat');
-      }
-      if (wildcardId === 't_grimoire') {
-        return powerLevel <= 4 && ['Bard', 'Cleric', 'Druid'].includes(ability.school || '');
-      }
-      return false;
-    });
+    // 1. MAIN POWER: Clean, Open, No Box, No Indent
+    if (!isReference) {
+      return (
+        <div key={id} style={{ marginBottom: '20px' }}>
+          {/* Frequency & Charge - Big and readable */}
+          <div style={{ fontStyle: 'italic', fontSize: '1.5rem', marginBottom: '4px', color: '#000' }}>
+            {power.frequency}{power.charge ? `; charge` : ''}
+          </div>
+
+          {/* Metadata Bar */}
+          <div style={{ 
+            color: '#000', 
+            fontSize: '1.05rem', 
+            borderBottom: '1px solid #ccc', 
+            paddingBottom: '6px', 
+            marginBottom: '10px' 
+          }}>
+            {[power.school, power.type, power.origin, power.range, power.material].filter(Boolean).join(' | ')}
+          </div>
+
+          {/* Incantation with Line Breaks */}
+          {power.incantation && (
+            <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#000', fontSize: '1.05rem', whiteSpace: 'pre-line' }}>
+              {power.incantation} {power.incantation_multiplier > 1 ? ` x${power.incantation_multiplier}` : ''}
+            </div>
+          )}
+
+          {/* Main Effect Body */}
+          <div style={{ fontSize: '1.15rem', lineHeight: '1.6', whiteSpace: 'pre-line', color: '#000' }}>
+            {formatText(power.effect)}
+          </div>
+
+          {/* Notes & Restrictions */}
+          {power.note && (
+            <div style={{ fontSize: '1.15rem', marginTop: '12px', whiteSpace: 'pre-line' }}>
+              <strong>note:</strong> {formatText(power.note)}
+            </div>
+          )}
+          {power.limitation && (
+            <div style={{ fontSize: '1.15rem', marginTop: '12px', whiteSpace: 'pre-line' }}>
+              <strong>restriction:</strong> {formatText(power.limitation)}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 2. REFERENCE BLOCK: Grey Box, Indented, Bordered
+    return (
+      <div key={id} style={referenceBlockStyle(theme.dark)}>
+        <div style={refHeaderStyle}>{power.name}</div>
+        <div style={{ fontStyle: 'italic', marginBottom: '4px', fontSize: '0.9rem' }}>
+          {power.frequency}{power.charge ? `; charge` : ''}
+        </div>
+        <div style={metadataStyle}>
+          {[power.school, power.origin, power.origin, power.range, power.material].filter(Boolean).join(' | ')}
+        </div>
+        <div style={{ fontSize: '0.95rem', whiteSpace: 'pre-line', color: '#000' }}>
+          {formatText(power.effect)}
+        </div>
+      </div>
+    );
   };
 
-  const renderPowerBlock = (powerId: string, isReference = false) => {
-  const power = ALL_ABILITIES.find(a => a.powerId === powerId);
-  if (!power) return null;
-
-  // 1. DYNAMIC STYLING based on whether it's a sub-reference or a main expanded block
-  const containerStyle = isReference 
-    ? referenceBlockStyle(theme.dark) 
-    : { ...bookStyleBlock, borderLeft: `4px solid ${theme.dark}`, paddingLeft: '15px' };
-
-  const titleStyle = isReference 
-    ? refHeaderStyle 
-    : { fontSize: '1.4rem', fontFamily: "'HeaderFont', serif", color: theme.dark, marginBottom: '4px' };
-
-  return (
-    <div key={powerId} style={containerStyle}>
-      {/* Power Name/Header */}
-      <div style={titleStyle}>{power.name.upper()}</div>
-
-      {/* Frequency & Charge Line */}
-      <div style={{ fontStyle: 'italic', marginBottom: '4px', fontSize: '1rem' }}>
-        {power.frequency}{power.charge ? `; Charge` : ''}
-      </div>
-
-      {/* THE METADATA BAR (The Core Schema) */}
-      <div style={{ 
-        color: '#4b4b4b', 
-        fontSize: '0.9rem', 
-        borderBottom: '1px solid #ccc', 
-        paddingBottom: '4px', 
-        marginBottom: '8px',
-        letterSpacing: '0.5px'
-      }}>
-        {[
-          power.school, 
-          power.abilityType, 
-          power.power, 
-          power.abilityRange, 
-          power.material
-        ].filter(Boolean).join(' | ')}
-      </div>
-
-      {/* Incantation (If applicable) */}
-      {power.incantation && (
-        <div style={{ fontStyle: 'italic', marginBottom: '8px', color: '#333', fontSize: '0.95rem', whiteSpace: 'pre-line' }}>
-          "{power.incantation}"{power.incantation_multiplier > 1 ? ` x${power.incantation_multiplier}` : ''}
-        </div>
-      )}
-
-      {/* Effect Body */}
-      <div style={{ 
-        fontSize: isReference ? '0.95rem' : '1.05rem', 
-        lineHeight: '1.5', 
-        whiteSpace: 'pre-line' 
-      }}>
-        {formatText(power.effect)}
-      </div>
-
-      {/* Limitations/Notes */}
-      {power.limitation && (
-        <div style={{ marginTop: '8px', fontSize: '0.9rem' }}>
-          <strong>Restriction:</strong> {formatText(power.limitation)}
-        </div>
-      )}
-    </div>
-  );
-};
-
   const renderReferenceBlock = (refId: string) => {
-    const refPower = ALL_ABILITIES.find(a => a.powerId === refId);
+    const refPower = ALL_POWERS.find(a => a.id === refId);
     if (!refPower) return null;
     return (
       <div key={refId} style={referenceBlockStyle(theme.dark)}>
         <div style={refHeaderStyle}>{refPower.name}</div>
         <div style={{ fontStyle: 'italic', marginBottom: '4px' }}>{refPower.frequency}{refPower.charge ? `; Charge` : ''}</div>
         <div style={metadataStyle}>
-          {[refPower.school, refPower.abilityType, refPower.power, refPower.abilityRange, refPower.material].filter(Boolean).join(' | ')}
+          {[refPower.school, refPower.type, refPower.origin, refPower.range, refPower.material].filter(Boolean).join(' | ')}
         </div>
         <div style={{ fontSize: '0.95rem', whiteSpace: 'pre-line' }}>{formatText(refPower.effect)}</div>
       </div>
@@ -258,81 +254,62 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
         {Object.keys(groupedAbilities).sort().map(lvl => (
           <div key={lvl}>
             <h3 style={sectionHeader}>{`Level ${lvl}`}</h3>
-            {groupedAbilities[lvl].map(ability => {
-              const entry = stats.abilities[ability.powerId];
-              const isExpanded = expandedIds.has(ability.powerId);
-              const wildcardChoice = selectedMap[`${ability.powerId}_choice`];
+            {groupedAbilities[lvl].map((power: Power) => {
+              const entry = stats.powers[power.id];
+              const isExpanded = expandedIds.has(power.id);
+              const wildcardChoice = selectedMap[`${power.id}_choice`];
               if (!entry) return null;
 
               return (
-                <div key={ability.powerId} style={{ borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
-                  <div onClick={() => toggleExpanded(ability.powerId)} style={cardStyle(theme.dark)}>
-                    <span style={outlinedText}>{ability.name}</span>
-                    <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      {ability.isWildcard && (
-                        <button onClick={() => openWildcardModal(ability.powerId)} style={wildcardBtnStyle}>
-                          {wildcardChoice ? 'Change' : 'Select'}
-                        </button>
-                      )}
-                      {entry.selectionType === 'toggle' && (
-                        <input type="checkbox" checked={entry.currentQuantity > 0} onChange={() => updateQuantity(ability.powerId, 0)} style={{ width: '22px', height: '22px' }} />
-                      )}
-                      {entry.selectionType === 'counter' && (
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                          <button onClick={() => updateQuantity(ability.powerId, -1)} style={controlBtnStyle}>-</button>
-                          <span style={quantityStyle}>{entry.currentQuantity}</span>
-                          <button onClick={() => updateQuantity(ability.powerId, 1)} disabled={!entry.canIncrease} style={controlBtnStyle}>+</button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                <div key={power.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
+                  <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {/* 1. WILDCARD SELECTOR: Show if it's a wildcard rule OR if it's a Martial Feat */}
+                    {(ARCHETYPE_RULES.wildcards[power.id] || power.name === "Martial Feat") && (
+                      <button onClick={() => openWildcardModal(power.id)} style={wildcardBtnStyle}>
+                        {wildcardChoice ? 'Change' : 'Select'}
+                      </button>
+                    )}
 
+                    {/* 2. TOGGLE: Trust the entry */}
+                    {entry.selectionType === 'toggle' && (
+                      <input 
+                        type="checkbox" 
+                        checked={entry.currentQuantity > 0} 
+                        onChange={() => updateQuantity(power.id, 0)} 
+                        style={{ width: '22px', height: '22px' }} 
+                      />
+                    )}
+
+                    {/* 3. COUNTER: Trust the entry */}
+                    {entry.selectionType === 'counter' && (
+                      <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <button onClick={() => updateQuantity(power.id, -1)} style={controlBtnStyle}>-</button>
+                        <span style={quantityStyle}>{entry.currentQuantity}</span>
+                        <button 
+                          onClick={() => updateQuantity(power.id, 1)} 
+                          disabled={!entry.canIncrease} 
+                          style={controlBtnStyle}
+                        >
+                          +
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   {isExpanded && (
                     <div style={{ marginTop: '15px', padding: '0 10px' }}>
                       
-                      {/* 1. THE MAIN POWER (Clean, Big, No Box) */}
-                      <div style={{ marginBottom: '20px' }}>
-                        {/* Frequency & Metadata Bar */}
-                        <div style={{ fontStyle: 'italic', fontSize: '1.5rem', marginBottom: '4px' }}>
-                          {ability.frequency}{ability.charge ? `; Charge` : ''}
-                        </div>
-                        <div style={{ 
-                          color: '#4b4b4b', 
-                          fontSize: '1.05rem', // SLIGHTLY BIGGER
-                          borderBottom: '1px solid #ccc', 
-                          paddingBottom: '6px', 
-                          marginBottom: '10px',
-                        }}>
-                          {[ability.school, ability.abilityType, ability.power, ability.abilityRange, ability.material].filter(Boolean).join(' | ')}
-                        </div>
+                      {/* 1. THE MAIN POWER (Now calling the helper to ensure Incantations show!) */}
+                      {renderPowerBlock(power.id, false)}
 
-                        {/* Main Effect - BIGGER FONT */}
-                        <div style={{ fontSize: '1.15rem', lineHeight: '1.6', whiteSpace: 'pre-line' }}>
-                          {formatText(ability.effect)}
+                      {/* 2. THE SUB-POWERS (Kept as is) */}
+                      {ARCHETYPE_RULES.wildcards[power.id]?.bonusPowers?.map(bpId => (
+                        <div key={bpId} style={{ marginTop: '15px' }}>
+                          {renderReferenceBlock(bpId)}
                         </div>
-                        {/* Note Field */}
-                          {ability.note && (
-                            <div style={{ fontSize: '1.15rem', lineHeight: '1.6', marginTop: '12px', whiteSpace: 'pre-line' }}>
-                              <strong>Note:</strong> {formatText(ability.note)}
-                            </div>
-                          )}
-                        {/* Limitation Field */}
-                          {ability.limitation && (
-                            <div style={{ fontSize: '1.15rem', lineHeight: '1.6', marginTop: '12px', whiteSpace: 'pre-line' }}>
-                              <strong>Restriction:</strong> {formatText(ability.limitation)}
-                            </div>
-                          )}                                       
-                      </div>
-
-                      {/* 2. THE SUB-POWERS (Using the existing boxed-in Reference Block) */}
-                      {wildcardChoice && (
-                        <div style={{ marginTop: '15px', }}>
-                          {renderReferenceBlock(String(wildcardChoice))}
-                        </div>
-                      )}
+                      ))}
                       
-                      {ability.reference?.map((refId: string) => (
-                        <div style={{ marginTop: '15px', paddingBottom: '20px', }} key={refId}>
+                      {power.reference?.map((refId: string) => (
+                        <div style={{ marginTop: '15px', paddingBottom: '20px' }} key={refId}>
                           {renderReferenceBlock(refId)}
                         </div>
                       ))}
@@ -429,11 +406,33 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
           </button>
         </div>
       </div>
+      {activeWildcardId && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h2>Select your Power</h2>
+            <div style={{maxHeight: '60vh', overflowY: 'auto'}}>
+              {getWildcardOptions(activeWildcardId).map(opt => {
+                const isSelected = selectedMap[`${activeWildcardId}_choice`] === opt.id;
+
+                return (
+                  <div 
+                    key={opt.id} 
+                    onClick={() => selectWildcardChoice(activeWildcardId, opt.id)}
+                    style={optionRowStyle(isSelected)} // <--- ADD THE (isSelected) CALL HERE
+                  >
+                    <strong>{opt.name}</strong> ({opt.frequency})
+                  </div>
+                );
+              })}
+            </div>
+            <button onClick={closeWildcardModal} style={cancelBtnStyle}>Close</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-// --- STYLING ---
 const headerContainerStyle = (bg: string, text: string): React.CSSProperties => ({
   backgroundColor: bg, color: text, padding: '15px', position: 'fixed', top: '60px', left: 0, right: 0, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.3)', fontFamily: "'HeaderFont', serif"
 });
@@ -470,12 +469,32 @@ const modalOverlayStyle: React.CSSProperties = { position: 'fixed', top: 0, left
 
 const modalContentStyle: React.CSSProperties = { backgroundColor: 'white', padding: '20px', borderRadius: '8px', width: '90%', maxWidth: '400px', maxHeight: '80vh', overflowY: 'auto' };
 
-const optionRowStyle = (isSelected: boolean) => ({ padding: '10px', borderBottom: '1px solid #eee', cursor: 'pointer', backgroundColor: isSelected ? '#eef' : 'transparent' });
+const optionRowStyle = (isSelected: boolean): React.CSSProperties => ({
+  padding: '15px',
+  borderBottom: '1px solid #eee',
+  cursor: 'pointer',
+  backgroundColor: isSelected ? '#e0e0e0' : 'transparent',
+  fontSize: '1.1rem',
+  color: '#000'
+});
 
 const formatText = (text: string | null | undefined) => {
   if (!text) return null;
   const parts = text.split(/(\*.*?\*)/g);
   return parts.map((part, i) => part.startsWith('*') && part.endsWith('*') ? <i key={i}>{part.slice(1, -1)}</i> : part);
+};
+
+const cancelBtnStyle: React.CSSProperties = {
+  marginTop: '20px',
+  padding: '12px 20px',
+  backgroundColor: '#666',
+  color: 'white',
+  border: 'none',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  width: '100%',
+  fontSize: '1.1rem',
+  fontFamily: "'HeaderFont', serif"
 };
 
 export default Builder;

@@ -5,6 +5,7 @@ import Builder from './ui-elements/Builder.tsx';
 import SkirmishSelector from './ui-elements/SkirmishSelector.tsx';
 import CombatScreen from './ui-elements/CombatScreen';
 import ModifySelector from './ui-elements/ModifySelector.tsx';
+import { CharacterManifest } from './logic/ruleEngine.ts';
 
 // --- 1. DATA TYPES ---
 export interface SavedArsenal {
@@ -12,6 +13,7 @@ export interface SavedArsenal {
   className: string;
   level: number;
   selectedMap: Record<string, number>;
+  manifest: CharacterManifest;
   timestamp: string;
 }
 
