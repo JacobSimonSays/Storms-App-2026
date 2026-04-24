@@ -95,48 +95,41 @@ export const calculateCosts = (
   const activeArchId = Object.keys(selectedMap).find(id => ARCHETYPE_RULES.archetypes[id] && Number(selectedMap[id]) > 0);
   const archRule = activeArchId ? ARCHETYPE_RULES.archetypes[activeArchId] : null;
 
-  const activeWildcards = Object.keys(ARCHETYPE_RULES.wildcards)
-    .filter(id => {
-      const isSelected = Number(selectedMap[id]) > 0;
-      const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === id);
-      return isSelected || (mapping && mapping.level <= userLevel);
-    })
-    .map(id => ({ ...ARCHETYPE_RULES.wildcards[id], id }));
+  const activeWildcards = Object.keys(selectedMap)
+    .filter(id => ARCHETYPE_RULES.wildcards[id] && Number(selectedMap[id]) > 0)
+    .map(id => ARCHETYPE_RULES.wildcards[id]);
 
-  // 2. PREPARE MODIFIED POWER LIST (Apply Archetype Overrides & Identify Bonuses)
-
+  // 2. PREPARE MODIFIED POWER LIST (The "Patch" Step)
   const availablePowers = ALL_POWERS.filter(p => {
     if (p.inactive) return false;
-
-    // A: Native Class Powers (Checks your mapping/level)
+    
+    // Native Class Powers
     const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === p.id);
-    const isNative = mapping && mapping.level <= userLevel;
-    if (isNative) return true;
+  if (mapping && mapping.level <= userLevel) return true;
 
-    // B: THE FIX: Is it a bonus power granted by an active wildcard?
-    // We check if the current power's ID exists in any active wildcard's bonusPowers array.
-    const isBonusGrant = activeWildcards.some(w => w.bonusPowers?.includes(p.id));
-    if (isBonusGrant) return true;
+    // Wildcard Grants (Jack of All Trades, etc)
+    const isWildcardMatch = activeWildcards.some(w => 
+      w.allowedClasses.includes(p.className) && 
+      w.allowedOrigins.includes(p.origin) && 
+      w.allowedTiers.includes(p.tier)
+    );
+    if (isWildcardMatch) return true;
 
-    // C: Is it a user-selected choice?
-    const isUserChoice = Object.values(selectedMap).includes(p.id);
-    if (isUserChoice) return true;
+    // Direct Bonus Powers
+    if (activeWildcards.some(w => w.bonusPowers?.includes(p.id))) return true;
 
     return false;
   }).map(p => {
-    // ... keep your existing .map logic that applies overrides and sets isReference ...
-    const override = archRule?.overrides?.find((o: any) => o.id === p.id);
-    const isBonus = activeWildcards.some(w => w.bonusPowers?.includes(p.id));
-    const chosenPowerId = selectedMap[`${p.id}_choice`] || null;
-
-    return {
-      ...p,
-      cost: override?.cost ?? p.cost ?? 0,
-      freq_multiplier: override?.freq_multiplier ?? p.freq_multiplier ?? 1,
-      arch_restrict: override?.enabled === false ? true : (p.arch_restrict ?? false),
-      isReference: p.isReference || isBonus,
-      wildcardChoice: chosenPowerId
-    };
+    const override = archRule?.overrides?.find(o => o.id === p.id);
+    if (override) {
+      return { 
+        ...p, 
+        cost: override.cost ?? p.cost, 
+        freq_multiplier: override.freq_multiplier ?? p.freq_multiplier,
+        arch_restrict: override.enabled === false ? true : p.arch_restrict
+      };
+    }
+    return p;
   });
 
   // 3. INITIALIZE BUCKETS
@@ -150,46 +143,47 @@ export const calculateCosts = (
     }
   }
 
-  // 4. THE WATERFALL (Cost > 0 Only)
-  const powersToPlace = availablePowers
-    .filter(p => {
-      const qty = Number(selectedMap[p.id] || 0);
-      return qty > 0 && p.cost > 0;
+  // 4. THE WATERFALL
+  const selectedIds = Object.entries(selectedMap)
+    .filter(([id]) => !id.endsWith('_choice')) 
+    .flatMap(([id, qty]) => Array(Number(qty)).fill(id));
+
+  const powersToPlace = selectedIds
+    .map(id => {
+      const power = availablePowers.find(a => a.id === id);
+      const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === power?.originalId);
+      const pLvl = mapping ? mapping.level : getGlobalPowerLevel(id);
+      return { ...power, powerLevel: pLvl, isArchetype: power?.type === 'Archetype' };
     })
-    .flatMap(p => {
-      const qty = Number(selectedMap[p.id] || 0);
-      const mapping = classInfo?.tierMapping.find((m: any) => m.powerId === p.id);
-      const pLvl = mapping ? mapping.level : (getGlobalPowerLevel(p.id) || 1);
-      
-      // Create an array entry for EVERY purchase of this power
-      return Array(qty).fill(null).map(() => ({ 
-        ...p, 
-        powerLevel: pLvl 
-      }));
-    })
-    .sort((a, b) => b.powerLevel - a.powerLevel);
+    .filter(p => p && p.id && (p.isArchetype || p.origin !== "T") && (p.powerLevel ?? 0) > 0)
+    .sort((a, b) => {
+      if (a.isArchetype !== b.isArchetype) return a.isArchetype ? -1 : 1;
+      return (b.powerLevel ?? 0) - (a.powerLevel ?? 0);
+    });
 
   powersToPlace.forEach(p => {
-    if (isMartial) return;
+    if (isMartial) return; 
+    const cost = (p.cost ?? (p.isArchetype ? 2 : 1)) as number;
+    const minLvl = p.powerLevel || 1;
     
-    let remaining = p.cost;
-    // Walk through buckets from the power's minimum level up to current level
-    for (let l = p.powerLevel; l <= userLevel; l++) {
+    let remainingCostToAssign = cost;
+
+    for (let l = minLvl; l <= userLevel; l++) {
       if (!buckets[l]) continue;
       
       buckets[l].slots.forEach(slot => {
-        if (!slot.isFilled && remaining > 0) {
+        if (!slot.isFilled && remainingCostToAssign > 0) {
           slot.isFilled = true;
-          slot.id = p.id;
-          slot.cost = 1; // Each slot represents 1 cost unit
-          remaining--;
+          slot.id = p.id ?? null;
+          slot.cost = 1; 
+          remainingCostToAssign--;
         }
       });
       
-      if (remaining === 0) break;
+      if (remainingCostToAssign === 0) break;
     }
-    
-    if (remaining > 0) {
+
+    if (remainingCostToAssign > 0) {
       errors.push(`Insufficient slots for ${p.name}`);
     }
   });
@@ -197,35 +191,67 @@ export const calculateCosts = (
   // 5. GENERATE THE MANIFEST
   const powersManifest: Record<string, ManifestEntry> = {};
 
-  availablePowers.forEach(p => {
-    const freq = parseFrequency(p.frequency, p.freq_multiplier);
-    const currentQty = Number(selectedMap[p.id] || 0);
-    const mapping = classInfo.tierMapping.find((m: any) => m.powerId === p.id);
-    const minLvl = mapping ? mapping.level : getGlobalPowerLevel(p.id);
+    availablePowers.forEach(p => {
+      const freq = parseFrequency(p.frequency, p.freq_multiplier);
+      const isArchetype = p.type === 'Archetype';
+      const isTrait = p.origin === 'T';
+      const currentQty = Number(selectedMap[p.id] || 0);
 
-    const totalAvailableSlots = Object.values(buckets)
-      .filter(b => b.level >= minLvl)
-      .reduce((acc, b) => acc + b.slots.filter(s => !s.isFilled).length, 0);
+      // 1. Setup Cost and Level Requirements
+      const cost = p.cost ?? (isArchetype ? 2 : 1);
+      
+      // CHANGE: Use p.id here because CLASS_DATA is now namespaced by your Python script
+      const mapping = classInfo.tierMapping.find((m: any) => m.powerId === p.id);
+      const minLvl = mapping ? mapping.level : getGlobalPowerLevel(p.id);
 
-    // Visibility: Cost 0 powers are 'auto', Cost > 0 are 'purchasable'
-    // Reference powers (passengers) are always 'auto' but selectionType 'none'
-    const isAuto = p.cost === 0 || p.isReference;
+      // 2. Calculate Aggregate Availability
+      const totalAvailableSlots = Object.values(buckets)
+        .filter(b => b.level >= minLvl)
+        .reduce((acc, b) => acc + b.slots.filter(s => !s.isFilled).length, 0);
 
-    powersManifest[p.id] = {
-      id: p.id,
-      displayMode: isAuto ? 'auto' : 'purchasable',
-      selectionType: p.isReference ? 'none' : (p.name === "Martial Feat" ? 'dropdown' : (p.cost === 2 ? 'toggle' : 'counter')),
-      currentQuantity: currentQty,
-      canIncrease: !isAuto && totalAvailableSlots >= p.cost && !p.arch_restrict,
-      tracking: {
-        isTracked: freq.isTracked,
-        totalCharges: freq.total,
-        resetType: freq.reset as any
+      // 3. Determine Selection Type
+      let selectionType: 'none' | 'counter' | 'toggle' | 'dropdown' = 'none';
+      if (p.name === "Martial Feat") selectionType = 'dropdown';
+      else if (isArchetype) selectionType = 'toggle';
+      else if (!isMartial && !isTrait) selectionType = 'counter';
+
+      // 4. Calculate canIncrease
+      let canIncrease = false;
+
+      if (isMartial) {
+        if (isArchetype) {
+          const hasOtherArch = Object.keys(selectedMap).some(id => 
+            id !== p.id && 
+            ALL_POWERS.find(ap => ap.id === id)?.type === 'Archetype' &&
+            Number(selectedMap[id]) > 0
+          );
+          canIncrease = !hasOtherArch && currentQty === 0;
+        } else {
+          canIncrease = true; 
+        }
+      } else {
+        // THE FIX: Use the aggregate count instead of the old 'for' loop
+        // This allows the UI to stay active for split-cost powers
+        canIncrease = totalAvailableSlots >= cost;
       }
-    };
-  });
 
-  const sortedBuckets = Object.values(buckets).reverse();
+      powersManifest[p.id] = {
+        id: p.id,
+        displayMode: isTrait || (isMartial && !isArchetype) ? 'auto' : 'purchasable',
+        selectionType,
+        currentQuantity: currentQty,
+        canIncrease: canIncrease && !p.arch_restrict, 
+        tracking: {
+          isTracked: freq.isTracked,
+          totalCharges: freq.total,
+          resetType: freq.reset as any
+        }
+      };
+    });
+  const sortedBuckets = [];
+  for (let i = userLevel; i >= 1; i--) {
+    if (buckets[i]) sortedBuckets.push(buckets[i]);
+  }
 
   return {
     className,

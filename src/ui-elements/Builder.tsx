@@ -37,27 +37,16 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
   const openWildcardModal = (id: string) => setActiveWildcardId(id);
   const closeWildcardModal = () => setActiveWildcardId(null);
 
-  const getWildcardOptions = (wildcardId: string) => {
-    const rule = ARCHETYPE_RULES.wildcards[wildcardId];
-    if (!rule) return [];
-
-    return ALL_POWERS.filter(p => {
-      if (p.inactive) return false;
-      // THE FIX: If it's a bonus power, ignore class/origin/tier gates
-      const isExplicitBonus = rule.bonusPowers?.includes(p.id);
-      const matchesCriteria = rule.allowedClasses.includes(p.className) &&
-                              rule.allowedOrigins.includes(p.origin) &&
-                              rule.allowedTiers.includes(p.tier);
-      return isExplicitBonus || matchesCriteria;
-    }).sort((a, b) => a.name.localeCompare(b.name));
-  };
-
   const selectWildcardChoice = (wildcardId: string, choiceId: string) => {
     setSelectedMap(prev => ({
       ...prev,
       [`${wildcardId}_choice`]: choiceId
     }));
     closeWildcardModal();
+  };
+
+  const handleFinish = () => {
+    onSave(selectedMap);
   };
 
   const updateQuantity = (id: string, delta: number) => {
@@ -67,21 +56,21 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
     setSelectedMap(prev => {
       const current = Number(prev[id]) || 0;
 
+      // Toggle Logic (Archetypes)
       if (entry.selectionType === 'toggle') {
         const isTurningOn = current === 0;
         if (!isTurningOn) return { ...prev, [id]: 0 };
         if (!entry.canIncrease) return prev; 
 
-        // If turning on an Archetype, turn off all other Archetypes
         const cleaned = { ...prev };
-        Object.keys(stats.powers).forEach(key => {
-          if (stats.powers[key].selectionType === 'toggle') cleaned[key] = 0;
-        });
+        available
+          .filter((a: Power) => a.type === 'Archetype') // Explicitly type 'a' as Power
+          .forEach((a: Power) => { cleaned[a.id] = 0; });
 
         return { ...cleaned, [id]: 1 };
       }
 
-      // Counter logic
+      // Counter Logic (Spells/Feats)
       if (delta > 0 && !entry.canIncrease) return prev;
       return { ...prev, [id]: Math.max(0, current + delta) };
     });
@@ -220,7 +209,7 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
         <div style={refHeaderStyle}>{refPower.name}</div>
         <div style={{ fontStyle: 'italic', marginBottom: '4px' }}>{refPower.frequency}{refPower.charge ? `; Charge` : ''}</div>
         <div style={metadataStyle}>
-          {[refPower.school, refPower.type, refPower.origin, refPower.range, refPower.material].filter(Boolean).join(' | ')}
+          {[refPower.school, refPower.origin, refPower.origin, refPower.range, refPower.material].filter(Boolean).join(' | ')}
         </div>
         <div style={{ fontSize: '0.95rem', whiteSpace: 'pre-line' }}>{formatText(refPower.effect)}</div>
       </div>
@@ -262,39 +251,27 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
 
               return (
                 <div key={power.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
-                  <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    {/* 1. WILDCARD SELECTOR: Show if it's a wildcard rule OR if it's a Martial Feat */}
-                    {(ARCHETYPE_RULES.wildcards[power.id] || power.name === "Martial Feat") && (
-                      <button onClick={() => openWildcardModal(power.id)} style={wildcardBtnStyle}>
-                        {wildcardChoice ? 'Change' : 'Select'}
-                      </button>
-                    )}
-
-                    {/* 2. TOGGLE: Trust the entry */}
-                    {entry.selectionType === 'toggle' && (
-                      <input 
-                        type="checkbox" 
-                        checked={entry.currentQuantity > 0} 
-                        onChange={() => updateQuantity(power.id, 0)} 
-                        style={{ width: '22px', height: '22px' }} 
-                      />
-                    )}
-
-                    {/* 3. COUNTER: Trust the entry */}
-                    {entry.selectionType === 'counter' && (
-                      <div style={{ display: 'flex', alignItems: 'center' }}>
-                        <button onClick={() => updateQuantity(power.id, -1)} style={controlBtnStyle}>-</button>
-                        <span style={quantityStyle}>{entry.currentQuantity}</span>
-                        <button 
-                          onClick={() => updateQuantity(power.id, 1)} 
-                          disabled={!entry.canIncrease} 
-                          style={controlBtnStyle}
-                        >
-                          +
+                  <div onClick={() => toggleExpanded(power.id)} style={cardStyle(theme.dark)}>
+                    <span style={outlinedText}>{power.name}</span>
+                    <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      {ARCHETYPE_RULES.wildcards[power.id] && (
+                        <button onClick={() => openWildcardModal(power.id)} style={wildcardBtnStyle}>
+                          {wildcardChoice ? 'Change' : 'Select'}
                         </button>
-                      </div>
-                    )}
+                      )}
+                      {entry.selectionType === 'toggle' && (
+                        <input type="checkbox" checked={entry.currentQuantity > 0} onChange={() => updateQuantity(power.id, 0)} style={{ width: '22px', height: '22px' }} />
+                      )}
+                      {entry.selectionType === 'counter' && (
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                          <button onClick={() => updateQuantity(power.id, -1)} style={controlBtnStyle}>-</button>
+                          <span style={quantityStyle}>{entry.currentQuantity}</span>
+                          <button onClick={() => updateQuantity(power.id, 1)} disabled={!entry.canIncrease} style={controlBtnStyle}>+</button>
+                        </div>
+                      )}
+                    </div>
                   </div>
+
                   {isExpanded && (
                     <div style={{ marginTop: '15px', padding: '0 10px' }}>
                       
@@ -302,11 +279,11 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
                       {renderPowerBlock(power.id, false)}
 
                       {/* 2. THE SUB-POWERS (Kept as is) */}
-                      {ARCHETYPE_RULES.wildcards[power.id]?.bonusPowers?.map(bpId => (
-                        <div key={bpId} style={{ marginTop: '15px' }}>
-                          {renderReferenceBlock(bpId)}
+                      {wildcardChoice && (
+                        <div style={{ marginTop: '15px' }}>
+                          {renderReferenceBlock(String(wildcardChoice))}
                         </div>
-                      ))}
+                      )}
                       
                       {power.reference?.map((refId: string) => (
                         <div style={{ marginTop: '15px', paddingBottom: '20px' }} key={refId}>
@@ -406,33 +383,11 @@ const Builder = ({ initialClass, initialLevel, existingMap, onSave, onCancel }: 
           </button>
         </div>
       </div>
-      {activeWildcardId && (
-        <div style={modalOverlayStyle}>
-          <div style={modalContentStyle}>
-            <h2>Select your Power</h2>
-            <div style={{maxHeight: '60vh', overflowY: 'auto'}}>
-              {getWildcardOptions(activeWildcardId).map(opt => {
-                const isSelected = selectedMap[`${activeWildcardId}_choice`] === opt.id;
-
-                return (
-                  <div 
-                    key={opt.id} 
-                    onClick={() => selectWildcardChoice(activeWildcardId, opt.id)}
-                    style={optionRowStyle(isSelected)} // <--- ADD THE (isSelected) CALL HERE
-                  >
-                    <strong>{opt.name}</strong> ({opt.frequency})
-                  </div>
-                );
-              })}
-            </div>
-            <button onClick={closeWildcardModal} style={cancelBtnStyle}>Close</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
 
+// --- STYLING ---
 const headerContainerStyle = (bg: string, text: string): React.CSSProperties => ({
   backgroundColor: bg, color: text, padding: '15px', position: 'fixed', top: '60px', left: 0, right: 0, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.3)', fontFamily: "'HeaderFont', serif"
 });
@@ -469,32 +424,12 @@ const modalOverlayStyle: React.CSSProperties = { position: 'fixed', top: 0, left
 
 const modalContentStyle: React.CSSProperties = { backgroundColor: 'white', padding: '20px', borderRadius: '8px', width: '90%', maxWidth: '400px', maxHeight: '80vh', overflowY: 'auto' };
 
-const optionRowStyle = (isSelected: boolean): React.CSSProperties => ({
-  padding: '15px',
-  borderBottom: '1px solid #eee',
-  cursor: 'pointer',
-  backgroundColor: isSelected ? '#e0e0e0' : 'transparent',
-  fontSize: '1.1rem',
-  color: '#000'
-});
+const optionRowStyle = (isSelected: boolean) => ({ padding: '10px', borderBottom: '1px solid #eee', cursor: 'pointer', backgroundColor: isSelected ? '#eef' : 'transparent' });
 
 const formatText = (text: string | null | undefined) => {
   if (!text) return null;
   const parts = text.split(/(\*.*?\*)/g);
   return parts.map((part, i) => part.startsWith('*') && part.endsWith('*') ? <i key={i}>{part.slice(1, -1)}</i> : part);
-};
-
-const cancelBtnStyle: React.CSSProperties = {
-  marginTop: '20px',
-  padding: '12px 20px',
-  backgroundColor: '#666',
-  color: 'white',
-  border: 'none',
-  borderRadius: '6px',
-  cursor: 'pointer',
-  width: '100%',
-  fontSize: '1.1rem',
-  fontFamily: "'HeaderFont', serif"
 };
 
 export default Builder;
